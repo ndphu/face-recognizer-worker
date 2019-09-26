@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"log"
-	"net/http"
 	"os"
 )
 
@@ -29,30 +28,30 @@ func init() {
 	} else {
 		decoder := json.NewDecoder(file)
 		if err := decoder.Decode(&appConfig); err != nil {
-			log.Panic("Fail to load config file JSON", err)
+			log.Panic("[CONFIG]", "Fail to load config file JSON", err)
 		}
 	}
 
 	loadEnvVariables()
 
-	settingsUrl := appConfig.BackendBaseUrl + "/project/" + appConfig.ProjectId + "/settings"
-	log.Println("loading configuration at:", settingsUrl)
-	if resp, err := http.Get(settingsUrl + "?token=" + appConfig.Token); err != nil {
-		log.Panic(err)
-	} else {
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			log.Println("server return invalid response: ", resp.StatusCode)
-			log.Println("using local settings")
-		} else {
-			if err := json.NewDecoder(resp.Body).Decode(&appConfig.RemoteSettings); err != nil {
-				log.Panic("fail to decode remote settings")
-			}
-			log.Println("remote settings loaded successfully")
-		}
-	}
+	//settingsUrl := appConfig.BackendBaseUrl + "/project/" + appConfig.ProjectId + "/settings"
+	//log.Println("loading configuration at:", settingsUrl)
+	//if resp, err := http.Get(settingsUrl + "?token=" + appConfig.Token); err != nil {
+	//	log.Panic(err)
+	//} else {
+	//	defer resp.Body.Close()
+	//	if resp.StatusCode != 200 {
+	//		log.Println("server return invalid response: ", resp.StatusCode)
+	//		log.Println("using local settings")
+	//	} else {
+	//		if err := json.NewDecoder(resp.Body).Decode(&appConfig.RemoteSettings); err != nil {
+	//			log.Panic("fail to decode remote settings")
+	//		}
+	//		log.Println("remote settings loaded successfully")
+	//	}
+	//}
 
-	log.Println("config loaded successfully")
+	log.Println("[CONFIG]", "Config loaded successfully")
 }
 
 func loadEnvVariables()  {

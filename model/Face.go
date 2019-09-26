@@ -1,4 +1,4 @@
-package recognize
+package model
 
 type FaceInfo struct {
 	Id         string       `json:"id"`

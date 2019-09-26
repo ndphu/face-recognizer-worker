@@ -1,7 +1,7 @@
 {
   "backendBaseUrl": "http://localhost:8080/api",
   "token": "faketoken",
-  "projectId": "28abdeec-9e3b-40ed-9f84-d1dfc4e9ba9b",
+  "projectId": "67c2faf5-a973-4a67-afa2-be6f30794647",
   "remoteSettings": {
     "mqttBroker": "tcp://192.168.26.43:1883",
     "syncInterval": "15s"

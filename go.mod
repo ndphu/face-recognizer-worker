@@ -2,8 +2,7 @@ module face-recognizer-worker
 
 go 1.12
 
-// TODO: for windows build
-// replace github.com/Kagami/go-face => D:\\go-path-2\\src\\github.com\\Kagami\\go-face
+//replace github.com/Kagami/go-face => D:\\go-path-2\\src\\github.com\\Kagami\\go-face
 
 require (
 	github.com/Kagami/go-face v0.0.0-00010101000000-000000000000
