@@ -1,13 +1,12 @@
 package worker
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"face-recognizer-worker/config"
-	"face-recognizer-worker/model"
 	"github.com/Kagami/go-face"
 	"github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
+	"github.com/ndphu/swd-commons/model"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -52,22 +51,10 @@ func (worker *Worker) Run() {
 
 	opts.OnConnect = func(c mqtt.Client) {
 		log.Println("[MQTT]", "Connected to MQTT")
-		c.Subscribe("/3ml/rpc/recognizeFaces/request", 0, func(c mqtt.Client, m mqtt.Message) {
-			req := model.RecognizeRequest{}
-			if err := json.Unmarshal(m.Payload(), &req); err != nil {
-				log.Println("[RPC] error parsing request", string(m.Payload()))
-				return
-			}
-			go worker.handleRecognizeRequest(c, req)
-		}).Wait()
-		c.Subscribe("/3ml/rpc/sync/request", 0, func(c mqtt.Client, m mqtt.Message) {
-			worker.reloadSamples()
-		}).Wait()
-
-		c.Subscribe("/3ml/rpc/recognizeFacesBulk/request", 0, func(c mqtt.Client, m mqtt.Message) {
+		c.Subscribe("/3ml/worker/" + worker.ProjectId +"/rpc/recognizeFacesBulk/request", 0, func(c mqtt.Client, m mqtt.Message) {
 			req := model.BulkRecognizeRequest{}
 			if err := json.Unmarshal(m.Payload(), &req); err != nil {
-				log.Println("[RPC] error parsing request", string(m.Payload()))
+				log.Println("[RPC] Error parsing request", len(m.Payload()))
 				return
 			}
 			go worker.handleBulkRecognizeRequest(c, req)
@@ -110,52 +97,6 @@ func (worker *Worker) Stop() {
 	log.Println("[Worker]", "Worker stopped for project", worker.ProjectId)
 }
 
-func (worker *Worker) handleRecognizeRequest(client mqtt.Client, req model.RecognizeRequest) {
-	reqId := req.RequestId
-	log.Println("[RPC]", reqId, "Request received")
-	frame, err := base64.StdEncoding.DecodeString(req.Payload)
-	if err != nil {
-		log.Println("[RPC]", reqId, "error recoding base64 image")
-		return
-	}
-	if faces, err := worker.Recognizer.Recognize(frame); err != nil {
-		log.Println("[RPC]", reqId, "error recognize image")
-	} else {
-		var rfs []model.RecognizedFace
-		if faces != nil {
-			worker.Lock.Lock()
-			for _, f := range faces {
-				classified := worker.Recognizer.ClassifyThreshold(f.Descriptor, 0.15)
-				if classified >= 0 && classified < len(worker.Categories) {
-					rfs = append(rfs, model.RecognizedFace{
-						Rect:       f.Rectangle,
-						Label:      worker.Categories[int32(classified)],
-						Classified: classified,
-						Descriptor: f.Descriptor,
-					})
-				} else {
-					rfs = append(rfs, model.RecognizedFace{
-						Rect:       f.Rectangle,
-						Label:      "UNKNOWN",
-						Classified: classified,
-						Descriptor: f.Descriptor,
-					})
-				}
-			}
-			worker.Lock.Unlock()
-		}
-		rpcResp := model.RecognizedResponse{
-			Error:           nil,
-			RecognizedFaces: rfs,
-		}
-		payload, _ := json.Marshal(rpcResp)
-		respTopic := "/3ml/rpc/recognizeFaces/response/" + reqId
-		log.Println("[RPC]", reqId, "Sending response to", respTopic)
-		client.Publish(respTopic, 0, false, payload).Wait()
-		log.Println("[RPC]", reqId, "Response published successfully", respTopic)
-	}
-}
-
 func (worker *Worker) handleBulkRecognizeRequest(client mqtt.Client, req model.BulkRecognizeRequest) {
 	reqId := req.RequestId
 	log.Println("[RPC]", reqId, "Request received")
@@ -165,27 +106,38 @@ func (worker *Worker) handleBulkRecognizeRequest(client mqtt.Client, req model.B
 	lock := sync.Mutex{}
 	wg := sync.WaitGroup{}
 
-	for _, f := range req.Images {
+	faceDetailsList := make([][]model.FaceDetails, len(req.Images))
+
+	for i, f := range req.Images {
 		wg.Add(1)
-		go func(frame []byte) {
+		go func(frame []byte, idx int) {
 			defer wg.Done()
 			if faces, err := worker.Recognizer.Recognize(frame); err != nil {
-				log.Println("[RPC]", reqId, "error recognize image")
+				log.Println("[RPC]", reqId, "Error recognize image")
 			} else {
 				if faces != nil {
 					worker.Lock.Lock()
-					for _, f := range faces {
-						classified := worker.Recognizer.ClassifyThreshold(f.Descriptor, 0.15)
-						if classified >= 0 && classified < len(worker.Categories) {
-							lock.Lock()
-							labelSet[worker.Categories[int32(classified)]] = true
-							lock.Unlock()
+					faceDetailsList[idx] = make([]model.FaceDetails, 0)
+					if len(faces) > 0 {
+						log.Println("[RPC]", reqId, "Set recognized image index:", idx)
+						for fdix, f := range faces {
+							classified := worker.Recognizer.ClassifyThreshold(f.Descriptor, 0.15)
+							if classified >= 0 && classified < len(worker.Categories) {
+								lock.Lock()
+								labelSet[worker.Categories[int32(classified)]] = true
+								lock.Unlock()
+							}
+							faceDetailsList[idx] = append(faceDetailsList[idx], model.FaceDetails{
+								Rect: faces[fdix].Rectangle,
+								Descriptor: faces[fdix].Descriptor,
+							})
 						}
 					}
+
 					worker.Lock.Unlock()
 				}
 			}
-		}(f)
+		}(f, i)
 	}
 
 	wg.Wait()
@@ -201,11 +153,15 @@ func (worker *Worker) handleBulkRecognizeRequest(client mqtt.Client, req model.B
 		Labels: labels,
 	}
 
+	if req.IncludeFacesDetails {
+		rpcResp.FaceDetailsList = faceDetailsList
+	}
+
 	payload, _ := json.Marshal(rpcResp)
-	respTopic := "/3ml/rpc/recognizeFacesBulk/response/" + reqId
-	log.Println("[RPC]", reqId, "Sending response to", respTopic)
-	client.Publish(respTopic, 0, false, payload).Wait()
-	log.Println("[RPC]", reqId, "Response published successfully", respTopic)
+
+	log.Println("[RPC]", reqId, "Sending response to", req.ResponseTo)
+	client.Publish(req.ResponseTo, 0, false, payload).Wait()
+	log.Println("[RPC]", reqId, "Response published successfully", req.ResponseTo)
 }
 
 func (worker *Worker) reloadSamples() error {
@@ -243,14 +199,14 @@ func (worker *Worker) reloadSamples() error {
 	}
 }
 
-func (worker *Worker) getFaces() ([]model.FaceInfo, error) {
+func (worker *Worker) getFaces() ([]model.Face, error) {
 	reloadUrl := config.Config().BackendBaseUrl + "/project/" + worker.ProjectId + "/faceInfos" + "?token=" + config.Config().Token
 	log.Println("[WORKER]", "Reload URL:", reloadUrl)
 	if resp, err := http.Get(reloadUrl); err != nil {
 		return nil, err
 	} else {
 		defer resp.Body.Close()
-		fis := make([]model.FaceInfo, 0)
+		fis := make([]model.Face, 0)
 		if body, err := ioutil.ReadAll(resp.Body); err != nil {
 			return nil, err
 		} else {

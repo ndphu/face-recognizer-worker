@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 	"face-recognizer-worker/config"
-	"face-recognizer-worker/model"
 	"face-recognizer-worker/worker"
+	"github.com/ndphu/swd-commons/model"
 	"io/ioutil"
 	"log"
 	"net/http"
