@@ -2,3 +2,4 @@
 face-recognizer-worker.iml
 faces.json
 go.mod
+go.sum

@@ -11,26 +11,19 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"time"
 )
 
 var workers = make([]*worker.Worker, 0)
 var workerLocks = sync.Mutex{}
 
 func main() {
-	projects, err := getProjects()
-	if err != nil {
-		log.Fatalln("[APP]", "Fail to load project list")
-	}
-	workerLocks.Lock()
-	for _, w := range workers {
-		w.Stop()
-	}
-	for _, project := range projects {
-		newWorker := worker.NewWorker(project.ProjectId)
-		workers = append(workers, newWorker)
-		go newWorker.Run()
-	}
-	workerLocks.Unlock()
+	go func() {
+		for {
+			reloadProjects()
+			time.Sleep(5 * time.Minute)
+		}
+	}()
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
@@ -42,6 +35,23 @@ func main() {
 	os.Exit(0)
 }
 
+func reloadProjects() {
+	projects, err := getProjects()
+	if err != nil {
+		log.Println("[APP]", "Fail to load project list", err.Error())
+		return
+	}
+	workerLocks.Lock()
+	for _, w := range workers {
+		w.Stop()
+	}
+	for _, project := range projects {
+		newWorker := worker.NewWorker(project.ProjectId)
+		workers = append(workers, newWorker)
+		go newWorker.Run()
+	}
+	workerLocks.Unlock()
+}
 
 func getProjects() ([]model.Project, error) {
 	reloadUrl := config.Config().BackendBaseUrl + "/projects?token=" + config.Config().Token
