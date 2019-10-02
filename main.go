@@ -10,11 +10,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"sync"
 )
-
-var workers = make(map[string]*worker.Worker)
-var workerLocks = sync.Mutex{}
 
 func main() {
 	topic := "/3ml/recognize/request"
@@ -29,22 +25,12 @@ func main() {
 				return
 			}
 			log.Println("[MQTT]", "BulkRecognizeRequest received")
-			if req.DeskId == ""{
+			if req.DeskId == "" {
 				log.Println("[MQTT]", "Empty deskId in request. Ignore the message.")
 				return
 			}
-
-			workerLocks.Lock()
-
-			w, exist := workers[req.DeskId]
-			if !exist {
-				w = worker.NewWorker(req.DeskId)
-				workers[req.DeskId] = w
-			}
-			workerLocks.Unlock()
-
+			w := worker.NewWorker(req.DeskId)
 			go w.HandleBulkRecognizeRequest(client, req)
-
 		}).Wait()
 		log.Println("[MQTT]", "Subscribed to BulkRecognizeRequest topic", topic)
 	}
