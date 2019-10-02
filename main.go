@@ -4,68 +4,98 @@ import (
 	"encoding/json"
 	"face-recognizer-worker/config"
 	"face-recognizer-worker/worker"
+	"github.com/eclipse/paho.mqtt.golang"
 	"github.com/ndphu/swd-commons/model"
-	"io/ioutil"
+	"github.com/ndphu/swd-commons/service"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"sync"
-	"time"
 )
 
-var workers = make([]*worker.Worker, 0)
+var workers = make(map[string]*worker.Worker)
 var workerLocks = sync.Mutex{}
 
 func main() {
-	go func() {
-		for {
-			reloadProjects()
-			time.Sleep(5 * time.Minute)
-		}
-	}()
+	topic := "/3ml/recognize/request"
+
+	opts := service.NewClientOpts(config.Config().RemoteSettings.MQTTBroker)
+	opts.OnConnect = func(client mqtt.Client) {
+		log.Println("[MQTT]", "Connected to broker")
+		client.Subscribe(topic, 0, func(client mqtt.Client, message mqtt.Message) {
+			req := model.BulkRecognizeRequest{}
+			if err := json.Unmarshal(message.Payload(), &req); err != nil {
+				log.Println("[MQTT]", "Fail to unmarshal message")
+				return
+			}
+			log.Println("[MQTT]", "BulkRecognizeRequest received")
+			if req.DeskId == ""{
+				log.Println("[MQTT]", "Empty deskId in request. Ignore the message.")
+				return
+			}
+
+			workerLocks.Lock()
+
+			w, exist := workers[req.DeskId]
+			if !exist {
+				w = worker.NewWorker(req.DeskId)
+				workers[req.DeskId] = w
+			}
+			workerLocks.Unlock()
+
+			go w.HandleBulkRecognizeRequest(client, req)
+
+		}).Wait()
+		log.Println("[MQTT]", "Subscribed to BulkRecognizeRequest topic", topic)
+	}
+	c := mqtt.NewClient(opts)
+	if tok := c.Connect(); tok.Wait() && tok.Error() != nil {
+		log.Panic("[MQTT]", "Fail to connect to message broker", tok.Error())
+	}
+
+	defer c.Disconnect(100)
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
 	<-signalChan
 	log.Println("Interrupt signal received. Exiting...")
-	for _, w := range workers {
-		w.Stop()
-	}
+	//for _, w := range workers {
+	//	w.Stop()
+	//}
 	os.Exit(0)
 }
 
-func reloadProjects() {
-	projects, err := getProjects()
-	if err != nil {
-		log.Println("[APP]", "Fail to load project list", err.Error())
-		return
-	}
-	workerLocks.Lock()
-	for _, w := range workers {
-		w.Stop()
-	}
-	for _, project := range projects {
-		newWorker := worker.NewWorker(project.ProjectId)
-		workers = append(workers, newWorker)
-		go newWorker.Run()
-	}
-	workerLocks.Unlock()
-}
-
-func getProjects() ([]model.Project, error) {
-	reloadUrl := config.Config().BackendBaseUrl + "/projects?token=" + config.Config().Token
-	log.Println("[WORKER]", "Reload URL:", reloadUrl)
-	if resp, err := http.Get(reloadUrl); err != nil {
-		return nil, err
-	} else {
-		defer resp.Body.Close()
-		projects := make([]model.Project, 0)
-		if body, err := ioutil.ReadAll(resp.Body); err != nil {
-			return nil, err
-		} else {
-			err = json.Unmarshal(body, &projects)
-			return projects, err
-		}
-	}
-}
+//func reloadProjects() {
+//	desks, err := getDesks()
+//	if err != nil {
+//		log.Println("[APP]", "Fail to load desk list", err.Error())
+//		return
+//	}
+//	workerLocks.Lock()
+//	for _, w := range workers {
+//		w.Stop()
+//	}
+//	for _, desk := range desks {
+//		newWorker := worker.NewWorker(desk.DeskId)
+//		workers = append(workers, newWorker)
+//		go newWorker.Run()
+//	}
+//	workerLocks.Unlock()
+//}
+//
+//func getDesks() ([]model.Desk, error) {
+//	reloadUrl := config.Config().BackendBaseUrl + "/desks?token=" + config.Config().Token
+//	log.Println("[WORKER]", "Reload URL:", reloadUrl)
+//	if resp, err := http.Get(reloadUrl); err != nil {
+//		return nil, err
+//	} else {
+//		defer resp.Body.Close()
+//		projects := make([]model.Desk, 0)
+//		if body, err := ioutil.ReadAll(resp.Body); err != nil {
+//			return nil, err
+//		} else {
+//			err = json.Unmarshal(body, &projects)
+//			return projects, err
+//		}
+//	}
+//}

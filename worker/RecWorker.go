@@ -5,31 +5,29 @@ import (
 	"face-recognizer-worker/config"
 	"github.com/Kagami/go-face"
 	"github.com/eclipse/paho.mqtt.golang"
-	"github.com/google/uuid"
 	"github.com/ndphu/swd-commons/model"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"sync"
-	"time"
 )
 
 type Worker struct {
 	Recognizer *face.Recognizer
 	Categories []string
 	Lock       sync.Mutex
-	ProjectId  string
+	DeskId     string
 	stopC      chan bool
 }
 
-func NewWorker(projectId string) *Worker {
+func NewWorker(deskId string) *Worker {
 	rec, err := face.NewRecognizer("data")
 	if err != nil {
 		log.Fatalln("[RECOGNIZE]", "Fail to initialize recognizer by error:", err)
 	}
 
 	var newWorker = &Worker{
-		ProjectId:  projectId,
+		DeskId:     deskId,
 		Lock:       sync.Mutex{},
 		Categories: make([]string, 0),
 		Recognizer: rec,
@@ -39,72 +37,24 @@ func NewWorker(projectId string) *Worker {
 	return newWorker
 }
 
-func (worker *Worker) Run() {
-	broker := config.Config().RemoteSettings.MQTTBroker
-	mqttClientId := uuid.New().String()
-
-	log.Println("[MQTT]", "Connecting to MQTT", broker, "with client ID:", mqttClientId)
-	opts := mqtt.NewClientOptions().AddBroker(broker).SetClientID(mqttClientId)
-	opts.SetKeepAlive(2 * time.Second)
-	opts.SetPingTimeout(1 * time.Second)
-	opts.SetConnectTimeout(30 * time.Second)
-
-	opts.OnConnect = func(c mqtt.Client) {
-		log.Println("[MQTT]", "Connected to MQTT")
-		c.Subscribe("/3ml/worker/" + worker.ProjectId +"/rpc/recognizeFacesBulk/request", 0, func(c mqtt.Client, m mqtt.Message) {
-			req := model.BulkRecognizeRequest{}
-			if err := json.Unmarshal(m.Payload(), &req); err != nil {
-				log.Println("[RPC] Error parsing request", len(m.Payload()))
-				return
-			}
-			go worker.handleBulkRecognizeRequest(c, req)
-		}).Wait()
-
-		log.Println("[MQTT]", "Subscribed")
-	}
-
-	mqttClient := mqtt.NewClient(opts)
-
-	if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
-		log.Fatalln("[MQTT]", "Fail to connect to MQTT Broker", token.Error().Error())
-	}
-	defer mqttClient.Disconnect(100)
-
-	worker.reloadSamples()
-	interval, err := time.ParseDuration(config.Config().RemoteSettings.SyncInterval)
-	if err != nil {
-		log.Fatalln("[SYNC]", "Fail to parse sync interval", config.Config().RemoteSettings.SyncInterval)
-	}
-	syncTicker := time.Tick(interval)
-	for {
-		select {
-		case <-syncTicker:
-			worker.reloadSamples()
-			break
-		case <-worker.stopC:
-			log.Println("[Worker]", "Stopping worker of project", worker.ProjectId)
-			worker.stopC <- true
-			return
-		}
-	}
-
-}
-
-func (worker *Worker) Stop() {
-	log.Println("[Worker]", "Requesting worker stop for project", worker.ProjectId)
-	worker.stopC <- true
-	<-worker.stopC
-	log.Println("[Worker]", "Worker stopped for project", worker.ProjectId)
-}
-
-func (worker *Worker) handleBulkRecognizeRequest(client mqtt.Client, req model.BulkRecognizeRequest) {
+func (worker *Worker) HandleBulkRecognizeRequest(client mqtt.Client, req model.BulkRecognizeRequest) {
 	reqId := req.RequestId
-	log.Println("[RPC]", reqId, "Request received")
 	log.Println("[RPC]", reqId, "Number of images:", len(req.Images))
 
 	labelSet := make(map[string]bool, 0)
 	lock := sync.Mutex{}
 	wg := sync.WaitGroup{}
+
+	if len(req.FacesData) > 0 {
+		// The request already provide face data, just use this data for recognition
+		log.Println("[RPC]", reqId, "Request provided faces data:", len(req.FacesData))
+		worker.reloadSamples(req.FacesData)
+	} else {
+		if err := worker.reloadSamplesFromServer(req.AccessToken); err != nil {
+			log.Println("[RPC]", reqId, "Fail to reload samples", len(req.Images))
+			return
+		}
+	}
 
 	faceDetailsList := make([][]model.FaceDetails, len(req.Images))
 
@@ -128,7 +78,7 @@ func (worker *Worker) handleBulkRecognizeRequest(client mqtt.Client, req model.B
 								lock.Unlock()
 							}
 							faceDetailsList[idx] = append(faceDetailsList[idx], model.FaceDetails{
-								Rect: faces[fdix].Rectangle,
+								Rect:       faces[fdix].Rectangle,
 								Descriptor: faces[fdix].Descriptor,
 							})
 						}
@@ -164,12 +114,30 @@ func (worker *Worker) handleBulkRecognizeRequest(client mqtt.Client, req model.B
 	log.Println("[RPC]", reqId, "Response published successfully", req.ResponseTo)
 }
 
-func (worker *Worker) reloadSamples() error {
+func (worker *Worker) reloadSamples(faces []model.Face) error {
 	log.Println("[WORKER]", "Reloading samples...")
 	worker.Lock.Lock()
 	defer worker.Lock.Unlock()
 
-	if fis, err := worker.getFaces(); err != nil {
+	var descriptors []face.Descriptor
+	var catIndexes []int32
+	var categories []string
+	for idx, faceInfo := range faces {
+		descriptors = append(descriptors, faceInfo.Descriptor)
+		catIndexes = append(catIndexes, int32(idx))
+		categories = append(categories, faceInfo.UserId.Hex())
+	}
+	worker.Recognizer.SetSamples(descriptors, catIndexes)
+	worker.Categories = categories
+	return nil
+}
+
+func (worker *Worker) reloadSamplesFromServer(accessToken string) error {
+	log.Println("[WORKER]", "Reloading samples from web server...")
+	worker.Lock.Lock()
+	defer worker.Lock.Unlock()
+
+	if fis, err := worker.getFaces(accessToken); err != nil {
 		log.Println("[WORKER]", "Fail to reload sample:", err.Error())
 		return err
 	} else {
@@ -199,8 +167,8 @@ func (worker *Worker) reloadSamples() error {
 	}
 }
 
-func (worker *Worker) getFaces() ([]model.Face, error) {
-	reloadUrl := config.Config().BackendBaseUrl + "/project/" + worker.ProjectId + "/faceInfos" + "?token=" + config.Config().Token
+func (worker *Worker) getFaces(accessToken string) ([]model.Face, error) {
+	reloadUrl := config.Config().BackendBaseUrl + "/desk/" + worker.DeskId + "/faceInfos" + "?accessToken=" + accessToken
 	log.Println("[WORKER]", "Reload URL:", reloadUrl)
 	if resp, err := http.Get(reloadUrl); err != nil {
 		return nil, err

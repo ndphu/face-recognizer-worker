@@ -34,7 +34,7 @@ func init() {
 
 	loadEnvVariables()
 
-	//settingsUrl := appConfig.BackendBaseUrl + "/project/" + appConfig.ProjectId + "/settings"
+	//settingsUrl := appConfig.BackendBaseUrl + "/project/" + appConfig.DeskId + "/settings"
 	//log.Println("loading configuration at:", settingsUrl)
 	//if resp, err := http.Get(settingsUrl + "?token=" + appConfig.Token); err != nil {
 	//	log.Panic(err)
