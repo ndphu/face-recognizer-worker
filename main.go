@@ -45,43 +45,5 @@ func main() {
 	signal.Notify(signalChan, os.Interrupt)
 	<-signalChan
 	log.Println("Interrupt signal received. Exiting...")
-	//for _, w := range workers {
-	//	w.Stop()
-	//}
 	os.Exit(0)
 }
-
-//func reloadProjects() {
-//	desks, err := getDesks()
-//	if err != nil {
-//		log.Println("[APP]", "Fail to load desk list", err.Error())
-//		return
-//	}
-//	workerLocks.Lock()
-//	for _, w := range workers {
-//		w.Stop()
-//	}
-//	for _, desk := range desks {
-//		newWorker := worker.NewWorker(desk.DeskId)
-//		workers = append(workers, newWorker)
-//		go newWorker.Run()
-//	}
-//	workerLocks.Unlock()
-//}
-//
-//func getDesks() ([]model.Desk, error) {
-//	reloadUrl := config.Config().BackendBaseUrl + "/desks?token=" + config.Config().Token
-//	log.Println("[WORKER]", "Reload URL:", reloadUrl)
-//	if resp, err := http.Get(reloadUrl); err != nil {
-//		return nil, err
-//	} else {
-//		defer resp.Body.Close()
-//		projects := make([]model.Desk, 0)
-//		if body, err := ioutil.ReadAll(resp.Body); err != nil {
-//			return nil, err
-//		} else {
-//			err = json.Unmarshal(body, &projects)
-//			return projects, err
-//		}
-//	}
-//}

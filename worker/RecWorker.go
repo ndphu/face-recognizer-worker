@@ -38,6 +38,8 @@ func NewWorker(deskId string) *Worker {
 }
 
 func (worker *Worker) HandleBulkRecognizeRequest(client mqtt.Client, req model.BulkRecognizeRequest) {
+	defer worker.Close()
+
 	reqId := req.RequestId
 	log.Println("[RPC]", reqId, "Number of images:", len(req.Images))
 
@@ -112,6 +114,7 @@ func (worker *Worker) HandleBulkRecognizeRequest(client mqtt.Client, req model.B
 	log.Println("[RPC]", reqId, "Sending response to", req.ResponseTo)
 	client.Publish(req.ResponseTo, 0, false, payload).Wait()
 	log.Println("[RPC]", reqId, "Response published successfully", req.ResponseTo)
+
 }
 
 func (worker *Worker) reloadSamples(faces []model.Face) error {
@@ -182,4 +185,7 @@ func (worker *Worker) getFaces(accessToken string) ([]model.Face, error) {
 			return fis, err
 		}
 	}
+}
+func (worker *Worker) Close() {
+	worker.Recognizer.Close()
 }
