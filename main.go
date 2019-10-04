@@ -19,18 +19,14 @@ func main() {
 	opts.OnConnect = func(client mqtt.Client) {
 		log.Println("[MQTT]", "Connected to broker")
 		client.Subscribe(topic, 0, func(client mqtt.Client, message mqtt.Message) {
-			req := model.BulkRecognizeRequest{}
+			req := model.RecognizeRequest{}
 			if err := json.Unmarshal(message.Payload(), &req); err != nil {
 				log.Println("[MQTT]", "Fail to unmarshal message")
 				return
 			}
-			log.Println("[MQTT]", "BulkRecognizeRequest received")
-			if req.DeskId == "" {
-				log.Println("[MQTT]", "Empty deskId in request. Ignore the message.")
-				return
-			}
+			log.Println("[MQTT]", "RecognizeRequest received")
 			w := worker.NewWorker(req.DeskId)
-			go w.HandleBulkRecognizeRequest(client, req)
+			go w.HandleRecognizeRequest(client, req)
 		}).Wait()
 		log.Println("[MQTT]", "Subscribed to BulkRecognizeRequest topic", topic)
 	}

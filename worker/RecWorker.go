@@ -37,11 +37,11 @@ func NewWorker(deskId string) *Worker {
 	return newWorker
 }
 
-func (worker *Worker) HandleBulkRecognizeRequest(client mqtt.Client, req model.BulkRecognizeRequest) {
+func (worker *Worker) HandleRecognizeRequest(client mqtt.Client, req model.RecognizeRequest) {
 	defer worker.Close()
 
 	reqId := req.RequestId
-	log.Println("[RPC]", reqId, "Number of images:", len(req.Images))
+	log.Println("[RPC]", reqId, "Number of images:", len(req.Images), "IncludeFaceDetails:", req.IncludeFacesDetails, "Should ClassifyFaces:", req.ClassifyFaces)
 
 	labelSet := make(map[string]bool, 0)
 	lock := sync.Mutex{}
@@ -52,14 +52,14 @@ func (worker *Worker) HandleBulkRecognizeRequest(client mqtt.Client, req model.B
 		log.Println("[RPC]", reqId, "Request provided faces data:", len(req.FacesData))
 		worker.reloadSamples(req.FacesData)
 	} else {
-		if err := worker.reloadSamplesFromServer(req.AccessToken); err != nil {
-			log.Println("[RPC]", reqId, "Fail to reload samples", len(req.Images))
-			return
+		if req.ClassifyFaces {
+			if err := worker.reloadSamplesFromServer(req.AccessToken); err != nil {
+				log.Println("[RPC]", reqId, "Fail to reload samples", len(req.Images))
+				return
+			}
 		}
 	}
-
 	faceDetailsList := make([][]model.FaceDetails, len(req.Images))
-
 	for i, f := range req.Images {
 		wg.Add(1)
 		go func(frame []byte, idx int) {
@@ -68,25 +68,26 @@ func (worker *Worker) HandleBulkRecognizeRequest(client mqtt.Client, req model.B
 				log.Println("[RPC]", reqId, "Error recognize image")
 			} else {
 				if faces != nil {
-					worker.Lock.Lock()
 					faceDetailsList[idx] = make([]model.FaceDetails, 0)
 					if len(faces) > 0 {
 						log.Println("[RPC]", reqId, "Set recognized image index:", idx)
-						for fdix, f := range faces {
-							classified := worker.Recognizer.ClassifyThreshold(f.Descriptor, 0.15)
-							if classified >= 0 && classified < len(worker.Categories) {
-								lock.Lock()
-								labelSet[worker.Categories[int32(classified)]] = true
-								lock.Unlock()
+						for faceIndex, f := range faces {
+							if req.ClassifyFaces {
+								classified := worker.Recognizer.ClassifyThreshold(f.Descriptor, 0.15)
+								if classified >= 0 && classified < len(worker.Categories) {
+									lock.Lock()
+									labelSet[worker.Categories[int32(classified)]] = true
+									lock.Unlock()
+								}
 							}
-							faceDetailsList[idx] = append(faceDetailsList[idx], model.FaceDetails{
-								Rect:       faces[fdix].Rectangle,
-								Descriptor: faces[fdix].Descriptor,
-							})
+							if req.IncludeFacesDetails {
+								faceDetailsList[idx] = append(faceDetailsList[idx], model.FaceDetails{
+									Rect:       faces[faceIndex].Rectangle,
+									Descriptor: faces[faceIndex].Descriptor,
+								})
+							}
 						}
 					}
-
-					worker.Lock.Unlock()
 				}
 			}
 		}(f, i)
@@ -95,12 +96,10 @@ func (worker *Worker) HandleBulkRecognizeRequest(client mqtt.Client, req model.B
 	wg.Wait()
 
 	labels := make([]string, 0)
-
 	for k := range labelSet {
 		labels = append(labels, k)
 	}
-
-	rpcResp := model.BulkRecognizeResponse{
+	rpcResp := model.RecognizeResponse{
 		Error:  nil,
 		Labels: labels,
 	}
